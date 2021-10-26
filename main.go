@@ -24,7 +24,7 @@ type Pair struct {
 	Second string
 }
 
-func NewPain(first, second string) Pair {
+func NewPair(first, second string) Pair {
 	return Pair{
 		First:  first,
 		Second: second,
