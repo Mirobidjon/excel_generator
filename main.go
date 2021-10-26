@@ -24,6 +24,13 @@ type Pair struct {
 	Second string
 }
 
+func NewPain(first, second string) Pair {
+	return Pair{
+		First:  first,
+		Second: second,
+	}
+}
+
 func generate(data Data, f *excelize.File, titles []Pair) {
 	key := 1
 	for _, row := range data.Rows {
