@@ -3,51 +3,10 @@ package excel_generator
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/360EntSecGroup-Skylar/excelize"
-	"github.com/minio/minio-go"
 	"github.com/xtgo/uuid"
 )
-
-type Data struct {
-	Rows []map[string]interface{} `json:"rows"`
-}
-
-type Response struct {
-	FileName string `json:"file_name"`
-	Url      string `json:"url"`
-}
-
-type Pair struct {
-	First  string
-	Second string
-}
-
-func NewPair(first, second string) Pair {
-	return Pair{
-		First:  first,
-		Second: second,
-	}
-}
-
-func generate(data Data, f *excelize.File, titles []Pair) {
-	key := 1
-	for _, row := range data.Rows {
-		key++
-		column := 'A'
-		f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", 'A', key), key-1)
-		for _, v := range titles {
-			for k, value := range row {
-				if v.First == k {
-					column++
-					f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", column, key), value)
-					break
-				}
-			}
-		}
-	}
-}
 
 func GenerateExcel(data []byte, bucketName, minioEndpoint, accessKey, secretKey string, titles ...Pair) (*Response, error) {
 	var model Data
@@ -58,6 +17,7 @@ func GenerateExcel(data []byte, bucketName, minioEndpoint, accessKey, secretKey 
 	}
 
 	f := excelize.NewFile()
+	filename := uuid.NewRandom()
 
 	column := 'A'
 	for _, v := range titles {
@@ -70,9 +30,9 @@ func GenerateExcel(data []byte, bucketName, minioEndpoint, accessKey, secretKey 
 	f.SetColWidth("Sheet1", "B", string(column), 30)
 	f.SetRowHeight("Sheet1", 1, 35)
 
-	generate(model, f, titles)
+	writer(model, f, titles)
 
-	v, err := minioUploader(bucketName, minioEndpoint, accessKey, secretKey, f)
+	v, err := minioUploader(bucketName, minioEndpoint, accessKey, secretKey, f, filename)
 	if err != nil {
 		return nil, err
 	}
@@ -80,37 +40,52 @@ func GenerateExcel(data []byte, bucketName, minioEndpoint, accessKey, secretKey 
 	return v, nil
 }
 
-func minioUploader(bucketName, minioEndpoint, accessKey, secretKey string, f *excelize.File) (*Response, error) {
+// GenerateWithWorkers generate excel file with worker pool, return FileName, channel for sending job, channel for receive percent, response channel
+func GenerateWithWorkers(workerCount int, jobsCount int, bucketName, minioEndpoint, accessKey, secretKey string, titles ...Pair) (string, chan<- []byte, <-chan int, <-chan Result) {
 	filename := uuid.NewRandom()
-	dst, _ := os.Getwd()
+	f := excelize.NewFile()
 
-	excelContentType := "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-	fmt.Println("generate file name: ", filename)
-
-	minioClient, err := minio.New(minioEndpoint, accessKey, secretKey, false)
-	if err != nil {
-		return nil, err
+	// writing title documents
+	column := 'A'
+	for _, v := range titles {
+		f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", column, 1), v.Second)
+		column++
 	}
 
-	exists, _ := minioClient.BucketExists(bucketName)
+	// styling documents
+	style, _ := f.NewStyle(`{"alignment":{"horizontal":"center", "vertical": "center", "wrap_text": true}}`)
+	f.SetCellStyle("Sheet1", "A1", fmt.Sprintf("%c%d", column, jobsCount+1), style)
+	f.SetColWidth("Sheet1", "B", string(column), 35)
+	f.SetRowHeight("Sheet1", 1, 35)
 
-	if !exists {
-		minioClient.MakeBucket(bucketName, "")
+	var percent int
+	jobs := make(chan WorkerJob, jobsCount)
+	results := make(chan error, jobsCount)
+	percentChan := make(chan int, 101)
+	jobChan := make(chan []byte, jobsCount)
+	responseChan := make(chan Result, 1)
+
+	// running workers
+	for k := 1; k <= workerCount; k++ {
+		go workers(jobs, results, f, &percent, jobsCount, percentChan, titles)
 	}
 
-	err = f.SaveAs(dst + "/" + filename.String() + ".xlsx")
-	if err != nil {
-		return nil, err
-	}
-	_, err = minioClient.FPutObject(bucketName, filename.String()+".xlsx", dst+"/"+filename.String()+".xlsx", minio.PutObjectOptions{ContentType: excelContentType})
-	if err != nil {
-		return nil, err
-	}
-	os.Remove(dst + "/" + filename.String() + ".xlsx")
+	// receiving jobs
+	go sendJobs(
+		jobs,
+		results,
+		jobChan,
+		jobsCount,
+		responseChan,
+		filename,
+		f,
+		MinioConfigurations{
+			BucketName:    bucketName,
+			MinioEndpoint: minioEndpoint,
+			AccessKey:     accessKey,
+			SecretKey:     secretKey,
+		},
+	)
 
-	return &Response{
-		FileName: filename.String(),
-		Url:      "https://" + minioEndpoint + "/" + bucketName + "/" + filename.String() + ".xlsx",
-	}, nil
+	return filename.String(), jobChan, percentChan, responseChan
 }
