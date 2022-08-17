@@ -17,17 +17,20 @@ func GenerateExcel(data []byte, bucketName, minioEndpoint, accessKey, secretKey 
 	}
 
 	f := excelize.NewFile()
-	filename := uuid.NewRandom()
+	filename := uuid.NewRandom().String()
 
-	column := 'A'
+	column := 1
+
+	// writing title documents
 	for _, v := range titles {
-		f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", column, 1), v.Second)
+		f.SetCellValue("Sheet1", fmt.Sprintf("%s%d", getExcelColumnChar(column), 1), v.Second)
 		column++
 	}
 
+	// styling documents
 	style, _ := f.NewStyle(`{"alignment":{"horizontal":"center", "vertical": "center", "wrap_text": true}}`)
-	f.SetCellStyle("Sheet1", "A1", fmt.Sprintf("%c%d", column, len(model.Rows)+1), style)
-	f.SetColWidth("Sheet1", "B", string(column), 30)
+	f.SetCellStyle("Sheet1", "A1", fmt.Sprintf("%s%d", getExcelColumnChar(column), len(model.Rows)+1), style)
+	f.SetColWidth("Sheet1", "B", getExcelColumnChar(column), 30)
 	f.SetRowHeight("Sheet1", 1, 35)
 
 	writer(model, f, titles)
@@ -42,20 +45,20 @@ func GenerateExcel(data []byte, bucketName, minioEndpoint, accessKey, secretKey 
 
 // GenerateWithWorkers generate excel file with worker pool, return FileName, channel for sending job, channel for receive percent, response channel
 func GenerateWithWorkers(workerCount int, jobsCount int, bucketName, minioEndpoint, accessKey, secretKey string, titles ...Pair) (string, chan<- []byte, <-chan int, <-chan Result) {
-	filename := uuid.NewRandom()
+	filename := uuid.NewRandom().String()
 	f := excelize.NewFile()
 
 	// writing title documents
-	column := 'A'
+	column := 1
 	for _, v := range titles {
-		f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", column, 1), v.Second)
+		f.SetCellValue("Sheet1", fmt.Sprintf("%s%d", getExcelColumnChar(column), 1), v.Second)
 		column++
 	}
 
 	// styling documents
 	style, _ := f.NewStyle(`{"alignment":{"horizontal":"center", "vertical": "center", "wrap_text": true}}`)
-	f.SetCellStyle("Sheet1", "A1", fmt.Sprintf("%c%d", column, jobsCount+1), style)
-	f.SetColWidth("Sheet1", "B", string(column), 35)
+	f.SetCellStyle("Sheet1", "A1", fmt.Sprintf("%s%d", getExcelColumnChar(column), jobsCount+1), style)
+	f.SetColWidth("Sheet1", "B", getExcelColumnChar(column), 35)
 	f.SetRowHeight("Sheet1", 1, 35)
 
 	var percent int
@@ -87,5 +90,5 @@ func GenerateWithWorkers(workerCount int, jobsCount int, bucketName, minioEndpoi
 		},
 	)
 
-	return filename.String(), jobChan, percentChan, responseChan
+	return filename, jobChan, percentChan, responseChan
 }

@@ -2,36 +2,40 @@ package excel_generator
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/360EntSecGroup-Skylar/excelize"
 	"github.com/minio/minio-go"
-	"github.com/xtgo/uuid"
 )
+
+func getExcelColumnChar(num int) string {
+	var result string
+	for num > 0 {
+		result = string('A'+rune((num-1)%26)) + result
+		num = (num - 1) / 26
+	}
+	return result
+}
 
 // writer write all data on excel file
 func writer(data Data, f *excelize.File, titles []Pair) {
 	key := 1
 	for _, row := range data.Rows {
 		key++
-		column := 'A'
+		column := 1
 		f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", 'A', key), key-1)
-		for _, v := range titles {
-			for k, value := range row {
-				if v.First == k {
-					column++
-					f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", column, key), value)
-					break
-				}
+		for index := range titles {
+			if value, ok := row[titles[index].First]; ok {
+				column++
+				f.SetCellValue("Sheet1", fmt.Sprintf("%s%d", getExcelColumnChar(column), key), value)
 			}
 		}
 	}
 }
 
-// minioUploader uploads the created file to minio
-func minioUploader(bucketName, minioEndpoint, accessKey, secretKey string, f *excelize.File, filename uuid.UUID) (*Response, error) {
+// minioUploader upload created file to the minio
+func minioUploader(bucketName, minioEndpoint, accessKey, secretKey string, f *excelize.File, filename string) (*Response, error) {
 	dst, _ := os.Getwd()
 
 	excelContentType := "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -47,23 +51,24 @@ func minioUploader(bucketName, minioEndpoint, accessKey, secretKey string, f *ex
 		minioClient.MakeBucket(bucketName, "")
 	}
 
-	err = f.SaveAs(dst + "/" + filename.String() + ".xlsx")
+	err = f.SaveAs(dst + "/" + filename + ".xlsx")
 	if err != nil {
 		return nil, err
 	}
-	_, err = minioClient.FPutObject(bucketName, filename.String()+".xlsx", dst+"/"+filename.String()+".xlsx", minio.PutObjectOptions{ContentType: excelContentType})
+	_, err = minioClient.FPutObject(bucketName, filename+".xlsx", dst+"/"+filename+".xlsx", minio.PutObjectOptions{ContentType: excelContentType})
 	if err != nil {
 		return nil, err
 	}
-	os.Remove(dst + "/" + filename.String() + ".xlsx")
+
+	os.Remove(dst + "/" + filename + ".xlsx")
 
 	return &Response{
-		FileName: filename.String(),
-		Url:      "https://" + minioEndpoint + "/" + bucketName + "/" + filename.String() + ".xlsx",
+		FileName: filename,
+		Url:      "https://" + minioEndpoint + "/" + bucketName + "/" + filename + ".xlsx",
 	}, nil
 }
 
-func sendJobs(jobs chan WorkerJob, results chan error, job chan []byte, jobsCount int, response chan<- Result, filename uuid.UUID, f *excelize.File, config MinioConfigurations) {
+func sendJobs(jobs chan WorkerJob, results chan error, job chan []byte, jobsCount int, response chan<- Result, filename string, f *excelize.File, config MinioConfigurations) {
 	for i := 0; i < jobsCount; i++ {
 		var data WorkerJob
 
@@ -106,26 +111,18 @@ func sendJobs(jobs chan WorkerJob, results chan error, job chan []byte, jobsCoun
 
 // workers
 func workers(jobs <-chan WorkerJob, results chan<- error, f *excelize.File, percent *int, jobsCount int, percentChan chan<- int, titles []Pair) {
-	if len(titles) > 25 {
-		results <- errors.New("rows limit error, you can generate max 25 rows")
-		return
-	}
-
 	for job := range jobs {
 		if ((job.Row-1)*100)/jobsCount > *percent {
 			*percent = ((job.Row - 1) * 100) / jobsCount
 			percentChan <- *percent
 		}
 
-		column := 'A'
-		f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", column, job.Row), job.Row-1)
-		for _, v := range titles {
-			for k, value := range job.Data {
-				if v.First == k {
-					column++
-					f.SetCellValue("Sheet1", fmt.Sprintf("%c%d", column, job.Row), value)
-					break
-				}
+		column := 1
+		f.SetCellValue("Sheet1", fmt.Sprintf("%s%d", getExcelColumnChar(column), job.Row), job.Row-1)
+		for index := range titles {
+			if value, ok := job.Data[titles[index].First]; ok {
+				column++
+				f.SetCellValue("Sheet1", fmt.Sprintf("%s%d", getExcelColumnChar(column), job.Row), value)
 			}
 		}
 
